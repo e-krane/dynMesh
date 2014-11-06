@@ -1,0 +1,58 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | foam-extend: Open Source CFD                    |
+|  \\    /   O peration     | Version:     3.1                                |
+|   \\  /    A nd           | Web:         http://www.extend-project.de       |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      dynamicMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dynamicFvMesh       myTurboFvMesh;
+
+turboFvMeshCoeffs
+{
+    coordinateSystem
+    {
+        type            cylindrical;
+        origin          (0 0 0);
+        axis            (0 0 1);
+        direction       (1 0 0);
+    }
+
+    variableRpm
+    {
+	startRpm	75;	// rpm which the simulation starts at
+	P		1;	// Nominal shaft power output
+	cutoffRpm	100;	// rpm under which P = 0
+	Iz		0.2;	// moment of inertia wrt. axis
+    }
+
+    forcesDict
+    {
+	patches		( "RUBLADE" "RUHUB" )	// The patches that forces should be calculated
+	rhoInf		998;			// Free stream density
+	
+
+// Not needed for variable rpm
+//    rpm
+//    {
+//        rotor 60;
+//
+//    }
+
+    slider
+    {
+        Rotor1_faceZone 60;
+        Rotor2_faceZone -30;
+    }
+}
+
+// ************************************************************************* //
+
