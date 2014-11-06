@@ -1,0 +1,381 @@
+/*---------------------------------------------------------------------------*\
+  =========                 |
+  \\      /  F ield         | foam-extend: Open Source CFD
+   \\    /   O peration     |
+    \\  /    A nd           | For copyright notice see file Copyright
+     \\/     M anipulation  |
+-------------------------------------------------------------------------------
+License
+    This file is part of foam-extend.
+
+    foam-extend is free software: you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    foam-extend is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with foam-extend.  If not, see <http://www.gnu.org/licenses/>.
+
+Author
+    Hrvoje Jasak, Wikki Ltd.  All rights reserved.
+    Fethi Tekin, All rights reserved.
+    Oliver Borm, All rights reserved.
+
+Modified 2014-11 to include variable rotational speed from fluid forces by:
+    Erik Krane, Chalmers University of Technology
+
+\*---------------------------------------------------------------------------*/
+
+#include "turboVarRpmFvMesh.H"
+#include "Time.H"
+#include "addToRunTimeSelectionTable.H"
+#include "ZoneIDs.H"
+
+// Added header files
+#include "forces.H"
+#include "IFstream.H"
+#include <iostream>
+
+// * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
+
+namespace Foam
+{
+    defineTypeNameAndDebug(turboVarRpmFvMesh, 0);
+    addToRunTimeSelectionTable(dynamicFvMesh, turboVarRpmFvMesh, IOobject);
+}
+
+
+// * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
+
+void Foam::turboVarRpmFvMesh::calcMovingPoints() const
+{
+    if (debug)
+    {
+        Info<< "void turboVarRpmFvMesh::calcMovingMasks() const : "
+            << "Calculating point and cell masks"
+            << endl;
+    }
+
+    if (movingPointsPtr_)
+    {
+        FatalErrorIn("void turboVarRpmFvMesh::calcMovingMasks() const")
+            << "point mask already calculated"
+            << abort(FatalError);
+    }
+
+    // Retrieve the cell zone Names
+    const wordList cellZoneNames = cellZones().names();
+
+    // Set the points
+    movingPointsPtr_ = new vectorField(allPoints().size(), vector::zero);
+
+    vectorField& movingPoints = *movingPointsPtr_;
+
+    const cellList& c = cells();
+    const faceList& f = allFaces();
+
+    scalar rpm;
+
+    forAll (cellZoneNames,cellZoneI)
+    {
+        const labelList& cellAddr =
+            cellZones()[cellZones().findZoneID(cellZoneNames[cellZoneI])];
+
+        if (constantDict_.subDict("rpm").found(cellZoneNames[cellZoneI]))
+        {
+            rpm = readScalar
+            (
+                constantDict_.subDict("rpm").lookup(cellZoneNames[cellZoneI])
+            );
+
+            Info<< "Moving Cell Zone Name: " << cellZoneNames[cellZoneI]
+                << " rpm: " << rpm << endl;
+
+            forAll (cellAddr, cellI)
+            {
+                const cell& curCell = c[cellAddr[cellI]];
+
+                forAll (curCell, faceI)
+                {
+                    const face& curFace = f[curCell[faceI]];
+
+                    forAll (curFace, pointI)
+                    {
+                        // The rotation data is saved within the cell data. For
+                        // non-rotating regions rpm is zero, so mesh movement
+                        // is also zero. The conversion of rotational speed
+
+                        // Note: deltaT changes during the run: moved to
+                        // turboVarRpmFvMesh::update().  HJ, 14/Oct/2010
+                        movingPoints[curFace[pointI]] =
+                            vector(0, rpm/60.0*360.0, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Retrieve the face zone Names
+    const wordList faceZoneNames = faceZones().names();
+
+    // This is not bullet proof, as one could specify the wrong name of a
+    // faceZone, which is then not selected. The solver will crash after the
+    // first meshMotion iteration.
+    forAll (faceZoneNames, faceZoneI)
+    {
+        if (constantDict_.subDict("slider").found(faceZoneNames[faceZoneI]))
+        {
+            rpm = readScalar
+            (
+                constantDict_.subDict("slider").lookup(faceZoneNames[faceZoneI])
+            );
+
+            Info<< "Moving Face Zone Name: " << faceZoneNames[faceZoneI]
+                << " rpm: " << rpm << endl;
+
+            faceZoneID zoneID(faceZoneNames[faceZoneI], faceZones());
+
+            const labelList& movingSliderAddr = faceZones()[zoneID.index()];
+
+            forAll (movingSliderAddr, faceI)
+            {
+                const face& curFace = f[movingSliderAddr[faceI]];
+
+                forAll (curFace, pointI)
+                {
+                    movingPoints[curFace[pointI]] =
+                        vector( 0, rpm/60.0*360.0, 0);
+                }
+            }
+        }
+    }
+}
+
+
+void Foam::turboVarRpmFvMesh::calcVariableMovingPoints() const
+{
+    if (debug)
+    {
+        Info<< "void turboVarRpmFvMesh::calcMovingMasks() const : "
+            << "Calculating point and cell masks"
+            << endl;
+    }
+
+    // Retrieve the cell zone Names
+    wordList cellZoneNames = cellZones().names();
+
+    // Set the points
+    movingPointsPtr_ = new vectorField(allPoints().size(), vector::zero);
+
+    vectorField& movingPoints = *movingPointsPtr_;
+
+    const cellList& c = cells();
+    const faceList& f = allFaces();
+
+    scalar rpm;
+    scalar rpmOld;
+
+    forAll (cellZoneNames,cellZoneI)
+    {
+        const labelList& cellAddr =
+            cellZones()[cellZones().findZoneID(cellZoneNames[cellZoneI])];
+
+        if (dict_.subDict("rotatingZones").found(cellZoneNames[cellZoneI]))
+        {
+            rpmOld = readScalar(rpmIO_.lookup(cellZoneNames[cellZoneI]));
+            #include "variableRpm.H"
+
+            rpmIO_.add(cellZoneNames[cellZoneI], rpm, true);
+
+            Info<< "Moving Cell Zone Name: " << cellZoneNames[cellZoneI]
+                << " rpm: " << rpm << endl;
+
+            forAll (cellAddr, cellI)
+            {
+                const cell& curCell = c[cellAddr[cellI]];
+
+                forAll (curCell, faceI)
+                {
+                    const face& curFace = f[curCell[faceI]];
+
+                    forAll (curFace, pointI)
+                    {
+                        // The rotation data is saved within the cell data. For
+                        // non-rotating regions rpm is zero, so mesh movement
+                        // is also zero. The conversion of rotational speed
+
+                        // Note: deltaT changes during the run: moved to
+                        // turboVarRpmFvMesh::update().  HJ, 14/Oct/2010
+                        movingPoints[curFace[pointI]] =
+                            vector(0, rpm/60.0*360.0, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Retrieve the face zone Names
+    const wordList faceZoneNames = faceZones().names();
+
+    //word cellZone_;
+    // This is not bullet proof, as one could specify the wrong name of a
+    // faceZone, which is then not selected. The solver will crash after the
+    // first meshMotion iteration.
+    forAll (faceZoneNames, faceZoneI)
+    {
+        if (dict_.subDict("slider").found(faceZoneNames[faceZoneI]))
+        {
+            //cellZone_ = dict_.subDict("slider").lookup(faceZoneNames[faceZoneI]);
+            rpm = readScalar(rpmIO_.lookup(
+                dict_.subDict("slider").lookup(faceZoneNames[faceZoneI])));
+
+            Info<< "Moving Face Zone Name: " << faceZoneNames[faceZoneI]
+                << " rpm: " << rpm << endl;
+
+            faceZoneID zoneID(faceZoneNames[faceZoneI], faceZones());
+
+            const labelList& movingSliderAddr = faceZones()[zoneID.index()];
+
+            forAll (movingSliderAddr, faceI)
+            {
+                const face& curFace = f[movingSliderAddr[faceI]];
+
+                forAll (curFace, pointI)
+                {
+                    movingPoints[curFace[pointI]] =
+                        vector( 0, rpm/60.0*360.0, 0);
+                }
+            }
+        }
+    }
+}
+
+
+// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
+
+// Construct from components
+Foam::turboVarRpmFvMesh::turboVarRpmFvMesh
+(
+    const IOobject& io
+)
+:
+    dynamicFvMesh(io),
+    dynamicMeshDict_
+    (
+        IOdictionary
+        (
+            IOobject
+            (
+                "dynamicMeshDict",
+                time().constant(),
+                *this,
+                IOobject::MUST_READ,
+                IOobject::NO_WRITE
+            )
+        )
+    ),
+    constantDict_
+    (
+        "turboFvMeshCoeffs",
+        dynamicMeshDict_.subDict("turboFvMeshCoeffs")
+    ),
+    dict_
+    (
+        "turboVarRpmFvMeshCoeffs",
+        dynamicMeshDict_.subDict("turboVarRpmFvMeshCoeffs")
+    ),
+    rpmIO_
+    (
+        IOdictionary
+        (
+            IOobject
+            (
+                "rpm",
+                time().timeName(),
+                *this,
+                IOobject::READ_IF_PRESENT,
+                IOobject::AUTO_WRITE
+            )
+        )
+    ),
+    cs_
+    (
+        "coordinateSystem",
+        dynamicMeshDict_.subDict("coordinateSystem")
+    ),
+    movingPointsPtr_(NULL)
+{
+    // Make sure the coordinate system does not operate in degrees
+    // Bug fix, HJ, 3/Oct/2011
+    if (!cs_.inDegrees())
+    {
+        WarningIn("turboVarRpmFvMesh::turboVarRpmFvMesh(const IOobject& io)")
+            << "Mixer coordinate system is set to operate in radians.  "
+            << "Changing to rad for correct calculation of angular velocity."
+            << nl
+            << "To remove this message please add entry" << nl << nl
+            << "inDegrees true;" << nl << nl
+            << "to the specification of the coordinate system"
+            << endl;
+
+        cs_.inDegrees() = true;
+    }
+
+
+    Info<< "Turbomachine Mixer mesh:" << nl
+        << "    origin: " << cs().origin() << nl
+        << "    axis  : " << cs().axis() << endl;
+}
+
+
+// * * * * * * * * * * * * * * * * Destructor  * * * * * * * * * * * * * * * //
+
+Foam::turboVarRpmFvMesh::~turboVarRpmFvMesh()
+{
+    deleteDemandDrivenData(movingPointsPtr_);
+}
+
+
+// * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
+
+// Return moving points mask
+const Foam::vectorField& Foam::turboVarRpmFvMesh::movingPoints() const
+{
+    if (!dynamicMeshDict_.lookup("variableRpm"))
+    {    
+        if (!movingPointsPtr_)
+        {
+            calcMovingPoints();
+        }
+    }
+    else if (dynamicMeshDict_.lookup("variableRpm"))
+    {
+        calcVariableMovingPoints();
+    }
+
+    return *movingPointsPtr_;
+}
+
+
+bool Foam::turboVarRpmFvMesh::update()
+{
+    movePoints
+    (
+        cs_.globalPosition
+        (
+            cs_.localPosition(allPoints())
+          + movingPoints()*time().deltaT().value()
+        )
+    );
+
+    // The mesh is not morphing
+    return false;
+}
+
+
+// ************************************************************************* //

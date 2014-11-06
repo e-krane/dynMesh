@@ -1,0 +1,75 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | foam-extend: Open Source CFD                    |
+|  \\    /   O peration     | Version:     3.1                                |
+|   \\  /    A nd           | Web:         http://www.extend-project.de       |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      dynamicMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dynamicFvMesh       turboVarRpmFvMesh;
+
+variableRpm         false;
+
+coordinateSystem
+{
+    type            cylindrical;
+    origin          (0 0 0);
+    axis            (0 0 1);
+    direction       (1 0 0);
+}
+
+turboFvMeshCoeffs
+{
+    rpm
+    {
+        rotor  -95.49578;
+    }
+    
+    slider
+    {
+        RUINLET     -95.49578;
+        RUOUTLET    -95.49578;
+        RUCYCLIC1   -95.49578;
+        RUCYCLIC2   -95.49578;
+    }
+}
+
+turboVarRpmFvMeshCoeffs
+{
+    rotatingZones 
+    {
+        rotor;
+    }
+
+    slider
+    {
+        RUINLET     "rotor";
+        RUOUTLET    "rotor";
+        RUCYCLIC1   "rotor";
+        RUCYCLIC2   "rotor";
+    }
+
+    forcePatches
+    {
+        rotor   ( RUHUB RUBLADE );
+    }
+
+    variableRpm
+    {
+        rhoInf      998;
+        I           [1, 1, 0.1];
+        cutOffRpm   20;
+        Pnom        2;
+        rpmNom      90;
+    }
+}
+
+// ************************************************************************* //

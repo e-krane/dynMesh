@@ -1,0 +1,3 @@
+turboVarRpmFvMesh/turboVarRpmFvMesh.C
+
+LIB = $(FOAM_USER_LIBBIN)/libMydynamicFvMesh
